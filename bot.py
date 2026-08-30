@@ -3,6 +3,7 @@ import re
 import sqlite3
 import discord
 import json
+import random
 
 # -------------------------
 # Configuration
@@ -52,7 +53,7 @@ def initialize_database():
                     target_user_id INTEGER NOT NULL,
                     requested_by_user_id INTEGER NOT NULL,
                     message_id INTEGER NOT NULL,
-                    message_content TEXT,
+                    ban_value INTEGER NOT NULL DEFAULT 1,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     UNIQUE(message_id, target_user_id)
                 )
@@ -68,13 +69,13 @@ def initialize_database():
             print("Migrating database for multi-user ban requests...")
 
             cursor.execute("""
-                CREATE TABLE ban_requests_new (
+                CREATE TABLE ban_requests (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     guild_id INTEGER NOT NULL,
                     target_user_id INTEGER NOT NULL,
                     requested_by_user_id INTEGER NOT NULL,
                     message_id INTEGER NOT NULL,
-                    message_content TEXT,
+                    ban_value INTEGER NOT NULL DEFAULT 1,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     UNIQUE(message_id, target_user_id)
                 )
@@ -107,13 +108,29 @@ def initialize_database():
             )
 
             print("Database migration complete.")
+            
+        # -------------------------
+        # Add ban_value if missing
+        # -------------------------
+        
+        cursor.execute("PRAGMA table_info(ban_requests)")
+        columns = [row[1] for row in cursor.fetchall()]
+        
+        if "ban_value" not in columns:
+            cursor.execute("""
+                ALTER TABLE ban_requests
+                ADD COLUMN ban_value INTEGER NOT NULL DEFAULT 1
+            """)
+        
+            print("Added ban_value column.")
 
 
 def add_ban_request(
     guild_id: int,
     target_user_id: int,
     requested_by_user_id: int,
-    message_id: int
+    message_id: int,
+    ban_value: int = 1
 ) -> bool:
     try:
         with sqlite3.connect(DATABASE_FILE) as connection:
@@ -122,14 +139,16 @@ def add_ban_request(
                     guild_id,
                     target_user_id,
                     requested_by_user_id,
-                    message_id
+                    message_id,
+                    ban_value
                 )
-                VALUES (?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?)
             """, (
                 guild_id,
                 target_user_id,
                 requested_by_user_id,
-                message_id
+                message_id,
+                ban_value
             ))
 
         return True
@@ -141,14 +160,28 @@ def add_ban_request(
 def get_ban_count(guild_id: int, target_user_id: int) -> int:
     with sqlite3.connect(DATABASE_FILE) as connection:
         cursor = connection.execute("""
-            SELECT COUNT(*)
+            SELECT COALESCE(SUM(ban_value), 0)
             FROM ban_requests
             WHERE guild_id = ?
               AND target_user_id = ?
-        """, (guild_id, target_user_id))
+        """, (
+            guild_id,
+            target_user_id
+        ))
 
         return cursor.fetchone()[0]
 
+def get_all_ban_counts(guild_id: int):
+    with sqlite3.connect(DATABASE_FILE) as connection:
+        cursor = connection.execute("""
+            SELECT target_user_id, COUNT(*) AS ban_count
+            FROM ban_requests
+            WHERE guild_id = ?
+            GROUP BY target_user_id
+            ORDER BY ban_count DESC
+        """, (guild_id,))
+
+        return cursor.fetchall()
 
 def wipe_server_data(guild_id: int) -> int:
     """
@@ -177,6 +210,38 @@ def wipe_all_data() -> int:
         """)
 
         return cursor.rowcount
+        
+def has_used_daily_ban(guild_id: int, requester_user_id: int) -> bool:
+    """
+    Returns True if this user has already submitted
+    a ban request in this server within the last 24 hours.
+    """
+
+    with sqlite3.connect(DATABASE_FILE) as connection:
+        cursor = connection.execute("""
+            SELECT 1
+            FROM ban_requests
+            WHERE guild_id = ?
+              AND requested_by_user_id = ?
+              AND created_at >= datetime('now', '-24 hours')
+            LIMIT 1
+        """, (
+            guild_id,
+            requester_user_id
+        ))
+
+        return cursor.fetchone() is not None
+        
+        cursor.execute("PRAGMA table_info(ban_requests)")
+        columns = [row[1] for row in cursor.fetchall()]
+
+        if "ban_value" not in columns:
+            cursor.execute("""
+                ALTER TABLE ban_requests
+                ADD COLUMN ban_value INTEGER NOT NULL DEFAULT 1
+            """)
+
+    print("Added ban_value column.")
 
 # -------------------------
 # Message detection
@@ -186,12 +251,12 @@ def is_count_question(content: str) -> bool:
     content = content.lower()
 
     patterns = [
-        r"how many .*ban",
-        r"ban count",
-        r"ban score",
-        r"ban total",
-        r"how many times .*ban",
-    ]
+        r"\bhow many bans?\b",
+        r"\bban count\b",
+        r"\bban score\b",
+        r"\bban total\b",
+        r"\bhow many times\b.*\bban",
+    ]  
 
     return any(re.search(pattern, content) for pattern in patterns)
 
@@ -209,6 +274,14 @@ def is_negative_ban_statement(content: str) -> bool:
 
     return any(re.search(pattern, content) for pattern in patterns)
 
+def is_super_ban_request(content: str) -> bool:
+    return bool(
+        re.search(
+            r"\bsuper\s+ban\b",
+            content,
+            re.IGNORECASE
+        )
+    )
 
 def is_ban_request(content: str) -> bool:
     content = content.lower()
@@ -249,9 +322,33 @@ def is_ban_request(content: str) -> bool:
 
         # give CJ a ban
         r"\bgive\b.*\bban\b",
+        
+        # super ban CJ
+        r"\bsuper\s+ban\b",
     ]
 
     return any(re.search(pattern, content) for pattern in patterns)
+    
+def has_used_super_ban(
+    guild_id: int,
+    requester_user_id: int
+) -> bool:
+
+    with sqlite3.connect(DATABASE_FILE) as connection:
+        cursor = connection.execute("""
+            SELECT 1
+            FROM ban_requests
+            WHERE guild_id = ?
+              AND requested_by_user_id = ?
+              AND ban_value = 5
+              AND created_at >= datetime('now', '-1 days')
+            LIMIT 1
+        """, (
+            guild_id,
+            requester_user_id
+        ))
+
+        return cursor.fetchone() is not None
 
 def extract_ban_target(content: str):
     """
@@ -310,7 +407,11 @@ def find_member_by_name(guild: discord.Guild, name: str):
 
     return None
 
-def find_targets_in_text(guild: discord.Guild, text: str):
+def find_targets_in_text(
+    guild: discord.Guild,
+    text: str,
+    requester: discord.Member = None
+):
     """
     Find all known Discord users mentioned in a piece of text.
 
@@ -325,6 +426,19 @@ def find_targets_in_text(guild: discord.Guild, text: str):
     """
 
     candidates = []
+    # -------------------------
+    # Self references
+    # -------------------------
+
+    if requester:
+        for match in re.finditer(
+            r"\b(?:me|myself)\b",
+            text,
+            re.IGNORECASE
+        ):
+            candidates.append(
+                (match.start(), requester)
+            )
 
     # -------------------------
     # Discord @mentions
@@ -399,34 +513,60 @@ def find_targets_in_text(guild: discord.Guild, text: str):
             seen_ids.add(member.id)
 
     return targets
+    
+def get_random_server_member(
+    guild: discord.Guild,
+    requester_id: int
+):
+    eligible_members = [
+        member
+        for member in guild.members
+        if not member.bot
+        and member.id != requester_id
+    ]
+
+    if not eligible_members:
+        return None
+
+    return random.choice(eligible_members)
 
 def resolve_targets(message: discord.Message):
-    """
-    Resolve one or more people associated with the ban request.
-
-    Usually looks after the word "ban".
-
-    Examples:
-        can we ban CJ
-        can we ban CJ and the mighty warrior
-        hit a fat ban on CJ and Ed
-
-    For phrases like:
-        CJ deserves a ban
-
-    it looks before the word "ban" instead.
-    """
-
     content = message.content
 
+    # -------------------------
+    # Random target phrases
+    # -------------------------
+
+    if (
+        is_ban_request(content)
+        and re.search(
+            r"\b(?:weird guy|random guy|ban roulette)\b",
+            content,
+            re.IGNORECASE
+        )
+    ):
+        random_target = get_random_server_member(
+            message.guild,
+            message.author.id
+        )
+
+        if random_target:
+            return [random_target]
+
+    # -------------------------
+    # Normal target resolution
+    # -------------------------
+
     ban_match = re.search(
-        r"\bban\b",
+        r"\bbans?\b",
         content,
         re.IGNORECASE
     )
 
     if not ban_match:
         return []
+
+   
 
     before_ban = content[:ban_match.start()]
     after_ban = content[ban_match.end():]
@@ -447,21 +587,16 @@ def resolve_targets(message: discord.Message):
     if target_before_ban:
         targets = find_targets_in_text(
             message.guild,
-            before_ban
+            before_ban,
+            message.author
         )
 
         if targets:
             return targets
 
     # -------------------------
-    # Normally the targets follow "ban"
+    # Normally targets follow "ban"
     # -------------------------
-
-    # Stop when the sentence turns into an explanation:
-    #
-    # can we ban CJ because @Ed keeps...
-    #
-    # This prevents Ed from becoming another target.
 
     target_section = re.split(
         r"\b(?:because|since|but|although|though|while|if|when)\b",
@@ -472,7 +607,8 @@ def resolve_targets(message: discord.Message):
 
     targets = find_targets_in_text(
         message.guild,
-        target_section
+        target_section,
+        message.author
     )
 
     if targets:
@@ -480,13 +616,28 @@ def resolve_targets(message: discord.Message):
 
     # -------------------------
     # Last fallback:
-    # look immediately before ban
+    # look before "ban"
     # -------------------------
 
     return find_targets_in_text(
         message.guild,
-        before_ban
+        before_ban,
+        message.author
     )
+    
+def get_ban_title(count: int):
+    if count >= 100:
+        return "☢️ EXISTENTIAL THREAT"
+    elif count >= 50:
+        return "🚨 ENEMY OF THE SERVER"
+    elif count >= 25:
+        return "⚠️ PUBLIC MENACE"
+    elif count >= 10:
+        return "👀 PERSON OF INTEREST"
+    elif count >= 5:
+        return "🤨 SUSPICIOUS INDIVIDUAL"
+
+    return None
 
 # -------------------------
 # Discord
@@ -540,6 +691,42 @@ async def on_message(message: discord.Message):
             )
             return
 
+
+    # -------------------------
+    # Ban leaderboard
+    # -------------------------
+
+    if content.strip().lower() in {
+        "all bans",
+        "ban leaderboard",
+        "show all bans",
+    }:
+        results = get_all_ban_counts(message.guild.id)
+
+        if not results:
+            await message.reply("No ban requests have been recorded yet.")
+            return
+
+        lines = []
+
+        for index, (user_id, count) in enumerate(results, start=1):
+            member = message.guild.get_member(user_id)
+
+            if member:
+                name = member.display_name
+            else:
+                name = f"Unknown User ({user_id})"
+
+            lines.append(
+                f"{index}. **{name}** — {count}"
+            )
+
+        await message.reply(
+            "🔨 **Ban Leaderboard**\n\n"
+            + "\n".join(lines)
+        )
+
+        return
     # -------------------------
     # Asking for ban count
     # -------------------------
@@ -591,18 +778,31 @@ async def on_message(message: discord.Message):
 
         return
 
+        super_ban = is_super_ban_request(content)
+    
+        ban_value = 1
+
+        if super_ban:
+
+            if has_used_super_ban(
+                essage.guild.id,
+                message.author.id
+            ):
+                await message.reply(
+                    "🚫 Your Super Ban is still recharging."
+                )
+                return
+
+            # Super Ban can only hit one person
+            targets = targets[:1]
+
+            ban_value = 10
+
     # -------------------------
     # Ignore negative statements
     # -------------------------
 
     if is_negative_ban_statement(content):
-        return
-
-    # -------------------------
-    # Ignore blocked users
-    # -------------------------
-
-    if message.author.id in BLOCKED_USER_IDS:
         return
 
     # -------------------------
@@ -613,13 +813,58 @@ async def on_message(message: discord.Message):
         return
 
     targets = resolve_targets(message)
-
+    
     if not targets:
         await message.reply(
             "I couldn't figure out who we're banning. "
             "Try using an @mention or a known name."
         )
         return
+    
+    # -------------------------
+    # Ban type
+    # -------------------------
+    
+    super_ban = is_super_ban_request(content)
+    ban_value = 1
+    
+    if super_ban:
+        if has_used_super_ban(
+            message.guild.id,
+            message.author.id
+        ):
+            await message.reply(
+                "🚫 Your Super Ban is still recharging."
+            )
+            return
+    
+        targets = targets[:1]
+        ban_value = 10
+        
+    # -------------------------
+    # Limited users:
+    # one ban every 24 hours
+    # with a 50% backfire chance
+    # -------------------------
+
+    backfired = False
+
+    if message.author.id in BLOCKED_USER_IDS:
+
+        if has_used_daily_ban(
+            message.guild.id,
+            message.author.id
+        ):
+            # Silently ignore additional attempts
+            return
+
+        # Limited users can only target one person
+        targets = targets[:1]
+
+        # 50/50 chance their ban hits themselves instead
+        if random.random() < 0.5:
+            targets = [message.author]
+            backfired = True
 
     # -------------------------
     # Record each target
@@ -637,14 +882,16 @@ async def on_message(message: discord.Message):
             guild_id=message.guild.id,
             target_user_id=target.id,
             requested_by_user_id=message.author.id,
-            message_id=message.id
+            message_id=message.id,
+            ban_value=ban_value
         )
-
         if added:
             recorded_targets.append(target)
 
     if not recorded_targets:
         return
+       
+    backfired = False
 
     # -------------------------
     # Respond
@@ -658,11 +905,41 @@ async def on_message(message: discord.Message):
             target.id
         )
 
-        await message.reply(
-            f"🔨 Ban request recorded for **{target.display_name}**.\n"
-            f"They are now at **{count}**."
-        )
+        title = get_ban_title(count)
 
+        if super_ban and backfired:
+            response = (
+                f"☢️💥 **SUPER BAN CATASTROPHIC BACKFIRE!** 💥☢️\n"
+                f"**{message.author.display_name}** attempted a Super Ban "
+            f"and received all **5 BAN POINTS** themselves.\n"
+                f"They are now at **{count}**."
+            )
+
+        elif super_ban:
+            response = (
+                f"🚨 **SUPER BAN DEPLOYED** 🚨\n"
+                f"**{target.display_name}** has been struck with "
+                f"**5 BAN POINTS**.\n"
+                f"They are now at **{count}**."
+            )
+        
+        elif backfired:
+            response = (
+                f"💥 **BAN BACKFIRE!**\n"
+                f"**{message.author.display_name}** somehow banned themselves.\n"
+                f"They are now at **{count}**."
+            )
+        
+        else:
+            response = (
+                f"🔨 Ban request recorded for **{target.display_name}**.\n"
+                f"They are now at **{count}**."
+            )
+
+        if title:
+            response += f"\nCurrent designation: **{title}**"
+
+        await message.reply(response)
         return
 
     lines = []
@@ -673,9 +950,14 @@ async def on_message(message: discord.Message):
             target.id
         )
 
-        lines.append(
-            f"🔨 **{target.display_name}** — {count}"
-        )
+        title = get_ban_title(count)
+
+        line = f"🔨 **{target.display_name}** — {count}"
+
+        if title:
+            line += f" — **{title}**"
+
+        lines.append(line)
 
     await message.reply(
         "Multiple ban requests recorded:\n\n"
