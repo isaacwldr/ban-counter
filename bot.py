@@ -1,4 +1,5 @@
 from llm_parser import interpret_message
+from personality import generate_tagina_response
 
 import os
 import re
@@ -72,7 +73,7 @@ def initialize_database():
             print("Migrating database for multi-user ban requests...")
 
             cursor.execute("""
-                CREATE TABLE ban_requests (
+                CREATE TABLE ban_requests_new (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     guild_id INTEGER NOT NULL,
                     target_user_id INTEGER NOT NULL,
@@ -91,7 +92,6 @@ def initialize_database():
                     target_user_id,
                     requested_by_user_id,
                     message_id,
-                    message_content,
                     created_at
                 )
                 SELECT
@@ -100,7 +100,6 @@ def initialize_database():
                     target_user_id,
                     requested_by_user_id,
                     message_id,
-                    message_content,
                     created_at
                 FROM ban_requests
             """)
@@ -177,7 +176,7 @@ def get_ban_count(guild_id: int, target_user_id: int) -> int:
 def get_all_ban_counts(guild_id: int):
     with sqlite3.connect(DATABASE_FILE) as connection:
         cursor = connection.execute("""
-            SELECT target_user_id, COUNT(*) AS ban_count
+            SELECT target_user_id, SUM(ban_value) AS ban_count
             FROM ban_requests
             WHERE guild_id = ?
             GROUP BY target_user_id
@@ -234,17 +233,6 @@ def has_used_daily_ban(guild_id: int, requester_user_id: int) -> bool:
         ))
 
         return cursor.fetchone() is not None
-        
-        cursor.execute("PRAGMA table_info(ban_requests)")
-        columns = [row[1] for row in cursor.fetchall()]
-
-        if "ban_value" not in columns:
-            cursor.execute("""
-                ALTER TABLE ban_requests
-                ADD COLUMN ban_value INTEGER NOT NULL DEFAULT 1
-            """)
-
-    print("Added ban_value column.")
 
 # -------------------------
 # Message detection
@@ -343,7 +331,7 @@ def has_used_super_ban(
             FROM ban_requests
             WHERE guild_id = ?
               AND requested_by_user_id = ?
-              AND ban_value = 5
+              AND ban_value = 10
               AND created_at >= datetime('now', '-1 days')
             LIMIT 1
         """, (
@@ -707,6 +695,8 @@ intents.members = True
 
 client = discord.Client(intents=intents)
 
+llm_semaphore = asyncio.Semaphore(1)
+
 
 @client.event
 async def on_ready():
@@ -736,26 +726,16 @@ async def on_message(message: discord.Message):
         llm_content = remove_ai_trigger(content)
     
         async with message.channel.typing():
-            ai_intent = await asyncio.to_thread(
-                interpret_message,
-                llm_content
-            )
+            async with llm_semaphore:
+                ai_intent = await asyncio.to_thread(
+                    interpret_message,
+                    llm_content
+                )
     
         print(f"LLM intent: {ai_intent}")
     
         if ai_intent.action == "none":
             return
-
-    # -------------------------
-    # LLM interpretation
-    # -------------------------
-    
-    if has_ai_trigger(content):
-        llm_content = remove_ai_trigger(content)
-    
-        intent = interpret_message(llm_content)
-    
-        print(f"LLM intent: {intent}")
     
     # -------------------------
     # Owner-only data wipe
@@ -778,35 +758,19 @@ async def on_message(message: discord.Message):
                 f"☢️ Wiped **{deleted}** ban records from ALL servers."
             )
             return
-
-    if content.lower().startswith("grok"):
-        intent = interpret_message(content)
-    
-        if intent.action == "ban":
-            targets = resolve_llm_targets(
-                message.guild,
-                ai_intent.targets,
-                message.author
-            )
-    
-            super_ban = intent.super_ban
-    
-            # Then continue into your EXISTING:
-            # cooldown
-            # backfire
-            # ban_value
-            # database
-            # response
             
     # -------------------------
     # Ban leaderboard
     # -------------------------
 
-    if content.strip().lower() in {
-        "all bans",
-        "ban leaderboard",
-        "show all bans",
-    }:
+    if (
+        (ai_intent and ai_intent.action == "leaderboard")
+        or content.strip().lower() in {
+            "all bans",
+            "ban leaderboard",
+            "show all bans",
+        }
+    ):
         results = get_all_ban_counts(message.guild.id)
 
         if not results:
@@ -837,9 +801,19 @@ async def on_message(message: discord.Message):
     # Asking for ban count
     # -------------------------
 
-    if is_count_question(content):
-
-        targets = resolve_targets(message)
+    if (
+        (ai_intent and ai_intent.action == "count")
+        or is_count_question(content)
+    ):
+    
+        if ai_intent and ai_intent.action == "count":
+            targets = resolve_llm_targets(
+                message.guild,
+                ai_intent.targets,
+                message.author
+            )
+        else:
+            targets = resolve_targets(message)
 
         if not targets:
             await message.reply(
@@ -884,26 +858,6 @@ async def on_message(message: discord.Message):
 
         return
 
-        super_ban = is_super_ban_request(content)
-    
-        ban_value = 1
-
-        if super_ban:
-
-            if has_used_super_ban(
-                essage.guild.id,
-                message.author.id
-            ):
-                await message.reply(
-                    "🚫 Your Super Ban is still recharging."
-                )
-                return
-
-            # Super Ban can only hit one person
-            targets = targets[:1]
-
-            ban_value = 10
-
     # -------------------------
     # Ignore negative statements
     # -------------------------
@@ -914,7 +868,7 @@ async def on_message(message: discord.Message):
     # -------------------------
     # Detect ban request
     # -------------------------
-
+    
     if ai_intent and ai_intent.action == "ban":
         targets = resolve_llm_targets(
             message.guild,
@@ -931,13 +885,14 @@ async def on_message(message: discord.Message):
         targets = resolve_targets(message)
     
         super_ban = is_super_ban_request(content)
-        
-        if not targets:
-            await message.reply(
-                "I couldn't figure out who we're banning. "
-                "Try using an @mention or a known name."
-            )
-            return
+    
+    
+    if not targets:
+        await message.reply(
+            "I couldn't figure out who we're banning. "
+            "Try using an @mention or a known name."
+        )
+        return
     
     # -------------------------
     # Ban type
@@ -1008,55 +963,104 @@ async def on_message(message: discord.Message):
     if not recorded_targets:
         return
        
-    backfired = False
 
     # -------------------------
     # Respond
     # -------------------------
-
+    
     if len(recorded_targets) == 1:
         target = recorded_targets[0]
-
+    
         count = get_ban_count(
             message.guild.id,
             target.id
         )
-
+    
         title = get_ban_title(count)
-
+    
+        # -------------------------
+        # Determine what happened
+        # -------------------------
+    
         if super_ban and backfired:
-            response = (
-                f"☢️💥 **SUPER BAN CATASTROPHIC BACKFIRE!** 💥☢️\n"
-                f"**{message.author.display_name}** attempted a Super Ban "
-            f"and received all **5 BAN POINTS** themselves.\n"
-                f"They are now at **{count}**."
+            event = "super_ban_backfire"
+            fallback = (
+                "☢️ SUPER BAN CATASTROPHIC BACKFIRE. "
+                "BEAUTIFUL WORK, TIMMY."
             )
-
+    
         elif super_ban:
-            response = (
-                f"🚨 **SUPER BAN DEPLOYED** 🚨\n"
-                f"**{target.display_name}** has been struck with "
-                f"**5 BAN POINTS**.\n"
-                f"They are now at **{count}**."
+            event = "super_ban"
+            fallback = (
+                "🚨 SUPER BAN DEPLOYED. "
+                "FACTORY HAS SPOKEN."
             )
-        
+    
         elif backfired:
-            response = (
-                f"💥 **BAN BACKFIRE!**\n"
-                f"**{message.author.display_name}** somehow banned themselves.\n"
-                f"They are now at **{count}**."
+            event = "ban_backfire"
+            fallback = (
+                "💥 BAN BACKFIRE. "
+                "YOU MANAGED TO SHOOT YOURSELF, TIMMY."
             )
-        
+    
         else:
-            response = (
-                f"🔨 Ban request recorded for **{target.display_name}**.\n"
-                f"They are now at **{count}**."
+            event = "normal_ban"
+            fallback = (
+                "🔨 BAN REQUEST RECORDED. "
+                "ANOTHER NAME FOR THE FACTORY LEDGER."
             )
-
+    
+        # -------------------------
+        # Let TAGINA react
+        # -------------------------
+    
+        try:
+            async with message.channel.typing():
+                async with llm_semaphore:
+                    flavor = await asyncio.to_thread(
+                        generate_tagina_response,
+                        event,
+                        message.author.display_name,
+                        target.display_name
+                    )
+    
+            if not flavor:
+                flavor = fallback
+    
+        except Exception as error:
+            print(
+                f"TAGINA personality generation failed: {error}"
+            )
+            flavor = fallback
+    
+        # -------------------------
+        # Deterministic facts
+        # -------------------------
+    
+        response = flavor
+    
+        point_word = "POINT" if count == 1 else "POINTS"
+        
+        response += (
+            f"\n\n🔨 **{target.display_name}** — "
+            f"**{count} BAN {point_word}**"
+        )
+    
+        if super_ban:
+            response += (
+                f"\n💥 THIS HIT: **{ban_value} POINTS**"
+            )
+    
         if title:
-            response += f"\nCurrent designation: **{title}**"
-
-        await message.reply(response)
+            response += (
+                f"\nDESIGNATION: **{title}**"
+            )
+    
+        await message.reply(
+            response,
+            allowed_mentions=discord.AllowedMentions.none()
+        )
+    
         return
 
     lines = []
