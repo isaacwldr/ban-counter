@@ -1,9 +1,12 @@
+from llm_parser import interpret_message
+
 import os
 import re
 import sqlite3
 import discord
 import json
 import random
+import asyncio
 
 # -------------------------
 # Configuration
@@ -426,6 +429,8 @@ def find_targets_in_text(
     """
 
     candidates = []
+    
+
     # -------------------------
     # Self references
     # -------------------------
@@ -509,6 +514,40 @@ def find_targets_in_text(
 
     for _, member in candidates:
         if member.id not in seen_ids:
+            targets.append(member)
+            seen_ids.add(member.id)
+
+    return targets
+    
+# LLM Targets
+def resolve_llm_targets(
+    guild: discord.Guild,
+    target_names: list[str],
+    requester: discord.Member
+):
+    targets = []
+    seen_ids = set()
+
+    for name in target_names:
+        normalized = name.casefold().strip()
+
+        # -------------------------
+        # Self references
+        # -------------------------
+
+        if normalized in {
+            "me",
+            "myself",
+            "myself please",
+        }:
+            member = requester
+        else:
+            member = find_member_by_name(
+                guild,
+                name
+            )
+
+        if member and member.id not in seen_ids:
             targets.append(member)
             seen_ids.add(member.id)
 
@@ -638,6 +677,25 @@ def get_ban_title(count: int):
         return "🤨 SUSPICIOUS INDIVIDUAL"
 
     return None
+    
+def has_ai_trigger(content: str) -> bool:
+    return bool(
+        re.search(
+            r"\b(?:ban bot|tagina)\b",
+            content,
+            re.IGNORECASE
+        )
+    )
+
+
+def remove_ai_trigger(content: str) -> str:
+    return re.sub(
+        r"\b(?:ban bot|tagina)\b[,:]?\s*",
+        "",
+        content,
+        count=1,
+        flags=re.IGNORECASE
+    ).strip()
 
 # -------------------------
 # Discord
@@ -668,6 +726,36 @@ async def on_message(message: discord.Message):
         return
 
     content = message.content
+    # -------------------------
+    # AI interpretation
+    # -------------------------
+    
+    ai_intent = None
+    
+    if has_ai_trigger(content):
+        llm_content = remove_ai_trigger(content)
+    
+        async with message.channel.typing():
+            ai_intent = await asyncio.to_thread(
+                interpret_message,
+                llm_content
+            )
+    
+        print(f"LLM intent: {ai_intent}")
+    
+        if ai_intent.action == "none":
+            return
+
+    # -------------------------
+    # LLM interpretation
+    # -------------------------
+    
+    if has_ai_trigger(content):
+        llm_content = remove_ai_trigger(content)
+    
+        intent = interpret_message(llm_content)
+    
+        print(f"LLM intent: {intent}")
     
     # -------------------------
     # Owner-only data wipe
@@ -691,7 +779,25 @@ async def on_message(message: discord.Message):
             )
             return
 
-
+    if content.lower().startswith("grok"):
+        intent = interpret_message(content)
+    
+        if intent.action == "ban":
+            targets = resolve_llm_targets(
+                message.guild,
+                ai_intent.targets,
+                message.author
+            )
+    
+            super_ban = intent.super_ban
+    
+            # Then continue into your EXISTING:
+            # cooldown
+            # backfire
+            # ban_value
+            # database
+            # response
+            
     # -------------------------
     # Ban leaderboard
     # -------------------------
@@ -809,23 +915,34 @@ async def on_message(message: discord.Message):
     # Detect ban request
     # -------------------------
 
-    if not is_ban_request(content):
-        return
-
-    targets = resolve_targets(message)
-    
-    if not targets:
-        await message.reply(
-            "I couldn't figure out who we're banning. "
-            "Try using an @mention or a known name."
+    if ai_intent and ai_intent.action == "ban":
+        targets = resolve_llm_targets(
+            message.guild,
+            ai_intent.targets,
+            message.author
         )
-        return
+    
+        super_ban = ai_intent.super_ban
+    
+    else:
+        if not is_ban_request(content):
+            return
+    
+        targets = resolve_targets(message)
+    
+        super_ban = is_super_ban_request(content)
+        
+        if not targets:
+            await message.reply(
+                "I couldn't figure out who we're banning. "
+                "Try using an @mention or a known name."
+            )
+            return
     
     # -------------------------
     # Ban type
     # -------------------------
     
-    super_ban = is_super_ban_request(content)
     ban_value = 1
     
     if super_ban:
