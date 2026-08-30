@@ -56,6 +56,24 @@ Users or server administrators may request deletion of applicable stored data by
 
 If Ban Counter is permanently discontinued, stored ban-request data will be deleted.
 
+## Local AI Processing
+
+TAGINA uses a locally hosted Ollama language model for certain
+natural-language interpretation and personality responses.
+
+When a user explicitly invokes TAGINA or Ban Bot, the relevant message
+text may be processed by the locally hosted language model.
+
+The bot may also provide limited event information, such as Discord
+display names and ban-event details, to the local model when generating
+personality responses.
+
+This AI processing occurs locally on the computer hosting the bot.
+Ban Counter does not send message content to an external AI provider
+such as OpenAI, Anthropic, or Google.
+
+Message content processed by the AI is not stored by Ban Counter.
+
 ## Security
 
 Ban Counter's stored database is not publicly accessible.
