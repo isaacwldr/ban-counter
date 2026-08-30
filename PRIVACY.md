@@ -47,6 +47,10 @@ Stored Discord data is not shared with third parties except where required by la
 
 Ban-request records are retained while needed to provide the bot's functionality.
 
+Ban Counter receives new messages only in Discord channels where the
+server has granted the bot access. It does not retrieve or scan
+historical message logs.
+
 The bot operator can delete:
 
 - All Ban Counter data associated with a specific Discord server
