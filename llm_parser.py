@@ -57,7 +57,10 @@ Rules:
 RECENT CONTEXT:
 The application may provide a small recent_context object from a prior SHTURMOTHY
 interaction. It contains only structured intent data, not raw chat history.
-Use it ONLY to resolve an elliptical follow-up.
+Use it ONLY to resolve an elliptical READ-ONLY follow-up such as a count query.
+Never use recent_context to supply or infer a target for a new "ban" action.
+A ban action must name its target explicitly in the CURRENT message.
+If the current message asks to ban without an explicit current target, return "none".
 
 Examples:
 recent_context = {"action": "count", "targets": ["Tyler"]}
@@ -67,6 +70,14 @@ message = "what about CJ?"
 recent_context = {"action": "count", "targets": ["Tyler"]}
 message = "what about him?"
 -> {"action":"count","targets":["Tyler"],"super_ban":false}
+
+recent_context = {"action": "count", "targets": ["Tyler"]}
+message = "ban"
+-> {"action":"none","targets":[],"super_ban":false}
+
+recent_context = {"action": "count", "targets": ["Tyler"]}
+message = "ban CJ"
+-> {"action":"ban","targets":["CJ"],"super_ban":false}
 
 Do not let recent context override an explicit current message.
 
@@ -119,6 +130,46 @@ def strip_ai_trigger(content: str) -> str:
         count=1,
         flags=re.IGNORECASE,
     ).strip()
+
+
+def _target_is_explicit_in_message(
+    content: str,
+    target: str,
+) -> bool:
+    """
+    Mutating ban actions must name their target in the current message.
+    Recent context may help read-only follow-ups, but it can never provide
+    a target for a new ban.
+    """
+    normalized_target = target.casefold().strip()
+    normalized_content = content.casefold()
+
+    if not normalized_target:
+        return False
+
+    # Self-targeting is explicit only when the current message actually
+    # contains a self-reference.
+    if normalized_target in {"me", "myself", "myself please"}:
+        return bool(
+            re.search(
+                r"\b(?:me|myself)\b",
+                normalized_content,
+                re.IGNORECASE,
+            )
+        )
+
+    # Preserve explicit Discord mention targets when the model returns
+    # the mention itself.
+    if re.fullmatch(r"<@!?\d+>", normalized_target):
+        return normalized_target in normalized_content
+
+    return bool(
+        re.search(
+            rf"(?<!\w){re.escape(normalized_target)}(?!\w)",
+            normalized_content,
+            re.IGNORECASE,
+        )
+    )
 
 
 def interpret_message(
@@ -174,6 +225,20 @@ def interpret_message(
         super_ban = data.get("super_ban", False)
         if not isinstance(super_ban, bool):
             super_ban = False
+
+        # A mutating ban can NEVER inherit a target from recent context.
+        # The target string returned by the model must actually appear in
+        # the current message. If it does not, fail closed.
+        if action == "ban":
+            targets = [
+                target
+                for target in targets
+                if _target_is_explicit_in_message(content, target)
+            ]
+
+            if not targets:
+                action = "none"
+                super_ban = False
 
         # These actions never need target data or a Super Ban flag.
         if action in {"leaderboard", "cooldown", "stats", "none"}:

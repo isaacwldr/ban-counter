@@ -97,6 +97,42 @@ TESTS = [
         },
         MessageIntent("count", ["Tyler"], False),
     ),
+    (
+        "ban",
+        {
+            "action": "count",
+            "targets": ["Tyler"],
+            "super_ban": False,
+        },
+        MessageIntent("none", [], False),
+    ),
+    (
+        "ban CJ",
+        {
+            "action": "count",
+            "targets": ["Tyler"],
+            "super_ban": False,
+        },
+        MessageIntent("ban", ["CJ"], False),
+    ),
+    (
+        "super ban",
+        {
+            "action": "count",
+            "targets": ["Tyler"],
+            "super_ban": False,
+        },
+        MessageIntent("none", [], False),
+    ),
+    (
+        "super ban CJ",
+        {
+            "action": "count",
+            "targets": ["Tyler"],
+            "super_ban": False,
+        },
+        MessageIntent("ban", ["CJ"], True),
+    ),
 ]
 
 
