@@ -60,27 +60,27 @@ TESTS = [
         MessageIntent("ban", ["cj"], False),
     ),
     (
-        "tagina I require a ban on ed",
+        "shturmothy I require a ban on ed",
         None,
         MessageIntent("ban", ["ed"], False),
     ),
     (
-        "Tagina can I super ban yet?",
+        "Shturmothy can I super ban yet?",
         None,
         MessageIntent("cooldown", [], False),
     ),
     (
-        "Tagina how long until my super ban comes back?",
+        "Shturmothy how long until my super ban comes back?",
         None,
         MessageIntent("cooldown", [], False),
     ),
     (
-        "Tagina give me the server ban stats",
+        "Shturmothy give me the server ban stats",
         None,
         MessageIntent("stats", [], False),
     ),
     (
-        "Tagina what about CJ?",
+        "Shturmothy what about CJ?",
         {
             "action": "count",
             "targets": ["Tyler"],
@@ -89,7 +89,7 @@ TESTS = [
         MessageIntent("count", ["CJ"], False),
     ),
     (
-        "Tagina what about him?",
+        "Shturmothy what about him?",
         {
             "action": "count",
             "targets": ["Tyler"],

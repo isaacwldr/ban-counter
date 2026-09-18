@@ -1,5 +1,5 @@
 from llm_parser import interpret_message
-from personality import generate_tagina_response
+from shturmothy_personality import generate_shturmothy_response
 
 import os
 import re
@@ -15,13 +15,13 @@ from datetime import datetime, timezone, timedelta
 # Configuration
 # -------------------------
 
-TOKEN = os.getenv("TAGINA_DISCORD_TOKEN")
+TOKEN = os.getenv("SHTURMOTHY_DISCORD_TOKEN")
 DATABASE_FILE = "ban_counter.db"
 CONTEXT_TTL_SECONDS = 10 * 60
 SUPER_BAN_COOLDOWN_HOURS = 24
 
 if not TOKEN:
-    raise RuntimeError("TAGINA_DISCORD_TOKEN environment variable is not set.")
+    raise RuntimeError("SHTURMOTHY_DISCORD_TOKEN environment variable is not set.")
 
 
 with open("config.json", "r") as file:
@@ -890,7 +890,7 @@ def get_ban_title(count: int):
 def has_ai_trigger(content: str) -> bool:
     return bool(
         re.search(
-            r"\b(?:ban bot|tagina)\b",
+            r"\b(?:ban bot|shturmothy)\b",
             content,
             re.IGNORECASE
         )
@@ -899,7 +899,7 @@ def has_ai_trigger(content: str) -> bool:
 
 def remove_ai_trigger(content: str) -> str:
     return re.sub(
-        r"\b(?:ban bot|tagina)\b[,:]?\s*",
+        r"\b(?:ban bot|shturmothy)\b[,:]?\s*",
         "",
         content,
         count=1,
@@ -962,7 +962,7 @@ client = discord.Client(intents=intents)
 llm_semaphore = asyncio.Semaphore(1)
 
 
-async def get_tagina_flavor(
+async def get_shturmothy_flavor(
     message: discord.Message,
     event: str,
     target_name: str = "",
@@ -973,7 +973,7 @@ async def get_tagina_flavor(
         async with message.channel.typing():
             async with llm_semaphore:
                 flavor = await asyncio.to_thread(
-                    generate_tagina_response,
+                    generate_shturmothy_response,
                     event,
                     message.author.display_name,
                     target_name,
@@ -983,11 +983,11 @@ async def get_tagina_flavor(
         return flavor or fallback
 
     except Exception as error:
-        print(f"TAGINA personality generation failed: {error}")
+        print(f"SHTURMOTHY personality generation failed: {error}")
         return fallback
 
 
-async def reply_with_tagina(
+async def reply_with_shturmothy(
     message: discord.Message,
     event: str,
     target_name: str = "",
@@ -995,7 +995,7 @@ async def reply_with_tagina(
     facts: str = "",
     fallback: str = "",
 ):
-    flavor = await get_tagina_flavor(
+    flavor = await get_shturmothy_flavor(
         message,
         event,
         target_name=target_name,
@@ -1038,7 +1038,7 @@ async def on_message(message: discord.Message):
     
     ai_intent = None
 
-    # TAGINA can be invoked either by name ("Tagina ...") or by directly
+    # SHTURMOTHY can be invoked either by name ("Shturmothy ...") or by directly
     # mentioning the bot at the start of the message.
     mention_trigger = re.match(
         rf"^\s*<@!?{client.user.id}>[,:]?\s*",
@@ -1116,7 +1116,7 @@ async def on_message(message: discord.Message):
         )
 
         if remaining <= 0:
-            await reply_with_tagina(
+            await reply_with_shturmothy(
                 message,
                 event="cooldown_ready",
                 details={"status": "ready"},
@@ -1124,7 +1124,7 @@ async def on_message(message: discord.Message):
                 fallback="THE BUTTON IS LIVE. TRY TO USE IT RESPONSIBLY. OR DON'T.",
             )
         else:
-            await reply_with_tagina(
+            await reply_with_shturmothy(
                 message,
                 event="cooldown_wait",
                 details={"status": "recharging"},
@@ -1152,7 +1152,7 @@ async def on_message(message: discord.Message):
         stats = get_server_stats(message.guild.id)
 
         if stats["total_requests"] == 0:
-            await reply_with_tagina(
+            await reply_with_shturmothy(
                 message,
                 event="empty_stats",
                 facts="📊 **No ban activity has been recorded yet.**",
@@ -1169,7 +1169,7 @@ async def on_message(message: discord.Message):
         top_requester = stats["top_requester"]
 
         stat_lines = [
-            "📊 **TAGINA BAN REPORT**",
+            "📊 **SHTURMOTHY BAN REPORT**",
             f"Requests recorded: **{stats['total_requests']}**",
             f"Total ban points: **{stats['total_points']}**",
             f"Requests in last 24h: **{stats['last_24h_requests']}**",
@@ -1196,7 +1196,7 @@ async def on_message(message: discord.Message):
                 f"**{top_requester[1]} requests**"
             )
 
-        flavor = await get_tagina_flavor(
+        flavor = await get_shturmothy_flavor(
             message,
             event="server_stats",
             details={
@@ -1227,7 +1227,7 @@ async def on_message(message: discord.Message):
         results = get_all_ban_counts(message.guild.id)
 
         if not results:
-            await reply_with_tagina(
+            await reply_with_shturmothy(
                 message,
                 event="empty_leaderboard",
                 facts="🔨 **No ban requests have been recorded yet.**",
@@ -1274,7 +1274,7 @@ async def on_message(message: discord.Message):
             targets = resolve_targets(message)
 
         if not targets:
-            await reply_with_tagina(
+            await reply_with_shturmothy(
                 message,
                 event="unknown_count_target",
                 details={"request_type": "count"},
@@ -1352,7 +1352,7 @@ async def on_message(message: discord.Message):
     
     
     if not targets:
-        await reply_with_tagina(
+        await reply_with_shturmothy(
             message,
             event="unknown_ban_target",
             details={"request_type": "ban"},
@@ -1379,7 +1379,7 @@ async def on_message(message: discord.Message):
                 message.guild.id,
                 message.author.id,
             )
-            await reply_with_tagina(
+            await reply_with_shturmothy(
                 message,
                 event="super_ban_blocked",
                 details={"status": "recharging"},
@@ -1445,11 +1445,11 @@ async def on_message(message: discord.Message):
 
     if not recorded_targets:
         if attempted_bot_target:
-            await reply_with_tagina(
+            await reply_with_shturmothy(
                 message,
                 event="bot_target",
                 target_name=client.user.display_name,
-                facts="🤖 **TAGINA cannot receive ban points.**",
+                facts="🤖 **SHTURMOTHY cannot receive ban points.**",
                 fallback="NICE TRY. I AM THE PAPERWORK.",
             )
         return
@@ -1502,10 +1502,10 @@ async def on_message(message: discord.Message):
             )
 
         # -------------------------
-        # Let TAGINA react
+        # Let SHTURMOTHY react
         # -------------------------
 
-        flavor = await get_tagina_flavor(
+        flavor = await get_shturmothy_flavor(
             message,
             event,
             target_name=target.display_name,

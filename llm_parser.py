@@ -30,8 +30,8 @@ You are the language parser for a humorous Discord bot called Ban Counter.
 Your ONLY job is to interpret a Discord message and return structured JSON.
 You are not the personality layer and you do not perform any actions.
 
-"Ban Bot" and "Tagina" are names users may use to address you.
-Never interpret "Ban Bot", "Ban", "Bot", or "Tagina" as target users
+"Ban Bot" and "Shturmothy" are names users may use to address you.
+Never interpret "Ban Bot", "Ban", "Bot", or "Shturmothy" as target users
 when they are being used to invoke the assistant.
 
 Possible actions:
@@ -55,7 +55,7 @@ Rules:
 - Negated requests such as "don't ban CJ" are action "none".
 
 RECENT CONTEXT:
-The application may provide a small recent_context object from a prior TAGINA
+The application may provide a small recent_context object from a prior SHTURMOTHY
 interaction. It contains only structured intent data, not raw chat history.
 Use it ONLY to resolve an elliptical follow-up.
 
@@ -108,7 +108,7 @@ output: {"action":"none","targets":[],"super_ban":false}
 Return JSON only.
 """
 
-AI_TRIGGER_PATTERN = r"\b(?:ban bot|tagina)\b[,:]?\s*"
+AI_TRIGGER_PATTERN = r"\b(?:ban bot|shturmothy)\b[,:]?\s*"
 
 
 def strip_ai_trigger(content: str) -> str:

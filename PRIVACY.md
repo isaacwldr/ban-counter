@@ -62,10 +62,10 @@ If Ban Counter is permanently discontinued, stored ban-request data will be dele
 
 ## Local AI Processing
 
-TAGINA uses a locally hosted Ollama language model for certain
+SHTURMOTHY uses a locally hosted Ollama language model for certain
 natural-language interpretation and personality responses.
 
-When a user explicitly invokes TAGINA or Ban Bot, the relevant message
+When a user explicitly invokes SHTURMOTHY or Ban Bot, the relevant message
 text may be processed by the locally hosted language model.
 
 The bot may also provide limited event information, such as Discord
