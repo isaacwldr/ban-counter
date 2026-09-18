@@ -13,7 +13,7 @@ import asyncio
 # Configuration
 # -------------------------
 
-TOKEN = os.getenv("DISCORD_TOKEN")
+TOKEN = os.getenv("TAGINA_DISCORD_TOKEN")
 DATABASE_FILE = "ban_counter.db"
 
 if not TOKEN:
