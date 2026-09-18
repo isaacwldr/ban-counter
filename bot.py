@@ -8,6 +8,8 @@ import discord
 import json
 import random
 import asyncio
+import time
+from datetime import datetime, timezone, timedelta
 
 # -------------------------
 # Configuration
@@ -15,9 +17,11 @@ import asyncio
 
 TOKEN = os.getenv("TAGINA_DISCORD_TOKEN")
 DATABASE_FILE = "ban_counter.db"
+CONTEXT_TTL_SECONDS = 10 * 60
+SUPER_BAN_COOLDOWN_HOURS = 24
 
 if not TOKEN:
-    raise RuntimeError("DISCORD_TOKEN environment variable is not set.")
+    raise RuntimeError("TAGINA_DISCORD_TOKEN environment variable is not set.")
 
 
 with open("config.json", "r") as file:
@@ -185,6 +189,209 @@ def get_all_ban_counts(guild_id: int):
 
         return cursor.fetchall()
 
+
+def get_server_stats(guild_id: int) -> dict:
+    """Return aggregate stats using only existing ban metadata."""
+    with sqlite3.connect(DATABASE_FILE) as connection:
+        total_requests = connection.execute("""
+            SELECT COUNT(DISTINCT message_id)
+            FROM ban_requests
+            WHERE guild_id = ?
+        """, (guild_id,)).fetchone()[0]
+
+        total_points = connection.execute("""
+            SELECT COALESCE(SUM(ban_value), 0)
+            FROM ban_requests
+            WHERE guild_id = ?
+        """, (guild_id,)).fetchone()[0]
+
+        last_24h_requests = connection.execute("""
+            SELECT COUNT(DISTINCT message_id)
+            FROM ban_requests
+            WHERE guild_id = ?
+              AND created_at >= datetime('now', '-24 hours')
+        """, (guild_id,)).fetchone()[0]
+
+        super_bans = connection.execute("""
+            SELECT COUNT(*)
+            FROM ban_requests
+            WHERE guild_id = ?
+              AND ban_value = 10
+        """, (guild_id,)).fetchone()[0]
+
+        self_bans = connection.execute("""
+            SELECT COUNT(*)
+            FROM ban_requests
+            WHERE guild_id = ?
+              AND target_user_id = requested_by_user_id
+        """, (guild_id,)).fetchone()[0]
+
+        top_target = connection.execute("""
+            SELECT target_user_id, SUM(ban_value) AS points
+            FROM ban_requests
+            WHERE guild_id = ?
+            GROUP BY target_user_id
+            ORDER BY points DESC
+            LIMIT 1
+        """, (guild_id,)).fetchone()
+
+        weekly_top_target = connection.execute("""
+            SELECT target_user_id, SUM(ban_value) AS points
+            FROM ban_requests
+            WHERE guild_id = ?
+              AND created_at >= datetime('now', '-7 days')
+            GROUP BY target_user_id
+            ORDER BY points DESC
+            LIMIT 1
+        """, (guild_id,)).fetchone()
+
+        top_requester = connection.execute("""
+            SELECT requested_by_user_id, COUNT(DISTINCT message_id) AS requests
+            FROM ban_requests
+            WHERE guild_id = ?
+            GROUP BY requested_by_user_id
+            ORDER BY requests DESC
+            LIMIT 1
+        """, (guild_id,)).fetchone()
+
+    return {
+        "total_requests": total_requests,
+        "total_points": total_points,
+        "last_24h_requests": last_24h_requests,
+        "super_bans": super_bans,
+        "self_bans": self_bans,
+        "top_target": top_target,
+        "weekly_top_target": weekly_top_target,
+        "top_requester": top_requester,
+    }
+
+
+def get_requester_request_count(
+    guild_id: int,
+    requester_user_id: int,
+) -> int:
+    with sqlite3.connect(DATABASE_FILE) as connection:
+        return connection.execute("""
+            SELECT COUNT(DISTINCT message_id)
+            FROM ban_requests
+            WHERE guild_id = ?
+              AND requested_by_user_id = ?
+        """, (
+            guild_id,
+            requester_user_id,
+        )).fetchone()[0]
+
+
+def get_self_ban_count(
+    guild_id: int,
+    user_id: int,
+) -> int:
+    with sqlite3.connect(DATABASE_FILE) as connection:
+        return connection.execute("""
+            SELECT COUNT(*)
+            FROM ban_requests
+            WHERE guild_id = ?
+              AND target_user_id = ?
+              AND requested_by_user_id = ?
+        """, (
+            guild_id,
+            user_id,
+            user_id,
+        )).fetchone()[0]
+
+
+def get_super_bans_received(
+    guild_id: int,
+    target_user_id: int,
+) -> int:
+    with sqlite3.connect(DATABASE_FILE) as connection:
+        return connection.execute("""
+            SELECT COUNT(*)
+            FROM ban_requests
+            WHERE guild_id = ?
+              AND target_user_id = ?
+              AND ban_value = 10
+        """, (
+            guild_id,
+            target_user_id,
+        )).fetchone()[0]
+
+
+def get_super_ban_cooldown_remaining(
+    guild_id: int,
+    requester_user_id: int,
+) -> int:
+    """Return Super Ban cooldown seconds remaining, or 0 when ready."""
+    with sqlite3.connect(DATABASE_FILE) as connection:
+        row = connection.execute("""
+            SELECT created_at
+            FROM ban_requests
+            WHERE guild_id = ?
+              AND requested_by_user_id = ?
+              AND ban_value = 10
+            ORDER BY created_at DESC
+            LIMIT 1
+        """, (
+            guild_id,
+            requester_user_id,
+        )).fetchone()
+
+    if not row:
+        return 0
+
+    last_used = datetime.strptime(
+        row[0],
+        "%Y-%m-%d %H:%M:%S",
+    ).replace(tzinfo=timezone.utc)
+
+    ready_at = last_used + timedelta(hours=SUPER_BAN_COOLDOWN_HOURS)
+    remaining = int(
+        (ready_at - datetime.now(timezone.utc)).total_seconds()
+    )
+
+    return max(0, remaining)
+
+
+def format_duration(seconds: int) -> str:
+    seconds = max(0, seconds)
+    hours, remainder = divmod(seconds, 3600)
+    minutes, _ = divmod(remainder, 60)
+
+    if hours:
+        return f"{hours}h {minutes}m"
+
+    return f"{minutes}m"
+
+
+MILESTONES = {
+    5: "THE PAPERWORK BEGINS",
+    10: "DOUBLE DIGITS",
+    25: "QUARTER-CENTURY OF COMPLAINTS",
+    50: "FIFTY PIECES OF EVIDENCE",
+    100: "CENTURY CLUB",
+    250: "ADMINISTRATIVE NIGHTMARE",
+    500: "THE LEDGER HAS A PROBLEM",
+    1000: "SYSTEM LIMITS WERE A SUGGESTION",
+}
+
+
+def get_crossed_milestone(
+    previous_count: int,
+    new_count: int,
+):
+    crossed = [
+        (threshold, label)
+        for threshold, label in MILESTONES.items()
+        if previous_count < threshold <= new_count
+    ]
+
+    if not crossed:
+        return None
+
+    return max(crossed, key=lambda item: item[0])
+
+
+
 def wipe_server_data(guild_id: int) -> int:
     """
     Delete all stored ban-request data for one Discord server.
@@ -216,7 +423,7 @@ def wipe_all_data() -> int:
 def has_used_daily_ban(guild_id: int, requester_user_id: int) -> bool:
     """
     Returns True if this user has already submitted
-    a ban request in this server within the last 24 hours.
+    a ban request in this server within the last hour.
     """
 
     with sqlite3.connect(DATABASE_FILE) as connection:
@@ -699,6 +906,49 @@ def remove_ai_trigger(content: str) -> str:
         flags=re.IGNORECASE
     ).strip()
 
+
+# -------------------------
+# Short-lived conversation context
+# -------------------------
+
+# RAM only: no raw Discord message text is stored here.
+conversation_context = {}
+
+
+def get_recent_context(
+    guild_id: int,
+    user_id: int,
+):
+    key = (guild_id, user_id)
+    entry = conversation_context.get(key)
+
+    if not entry:
+        return None
+
+    if time.monotonic() - entry["saved_at"] > CONTEXT_TTL_SECONDS:
+        conversation_context.pop(key, None)
+        return None
+
+    return {
+        "action": entry["action"],
+        "targets": entry["targets"],
+        "super_ban": entry["super_ban"],
+    }
+
+
+def save_recent_context(
+    guild_id: int,
+    user_id: int,
+    intent,
+):
+    conversation_context[(guild_id, user_id)] = {
+        "action": intent.action,
+        "targets": list(intent.targets),
+        "super_ban": intent.super_ban,
+        "saved_at": time.monotonic(),
+    }
+
+
 # -------------------------
 # Discord
 # -------------------------
@@ -710,6 +960,58 @@ intents.members = True
 client = discord.Client(intents=intents)
 
 llm_semaphore = asyncio.Semaphore(1)
+
+
+async def get_tagina_flavor(
+    message: discord.Message,
+    event: str,
+    target_name: str = "",
+    details: dict | None = None,
+    fallback: str = "",
+) -> str:
+    try:
+        async with message.channel.typing():
+            async with llm_semaphore:
+                flavor = await asyncio.to_thread(
+                    generate_tagina_response,
+                    event,
+                    message.author.display_name,
+                    target_name,
+                    details,
+                )
+
+        return flavor or fallback
+
+    except Exception as error:
+        print(f"TAGINA personality generation failed: {error}")
+        return fallback
+
+
+async def reply_with_tagina(
+    message: discord.Message,
+    event: str,
+    target_name: str = "",
+    details: dict | None = None,
+    facts: str = "",
+    fallback: str = "",
+):
+    flavor = await get_tagina_flavor(
+        message,
+        event,
+        target_name=target_name,
+        details=details,
+        fallback=fallback,
+    )
+
+    response = flavor
+    if facts:
+        response += f"\n\n{facts}"
+
+    await message.reply(
+        response,
+        allowed_mentions=discord.AllowedMentions.none(),
+    )
+
 
 
 @client.event
@@ -738,19 +1040,30 @@ async def on_message(message: discord.Message):
     
     if has_ai_trigger(content):
         llm_content = remove_ai_trigger(content)
-    
+        recent_context = get_recent_context(
+            message.guild.id,
+            message.author.id,
+        )
+
         async with message.channel.typing():
             async with llm_semaphore:
                 ai_intent = await asyncio.to_thread(
                     interpret_message,
-                    llm_content
+                    llm_content,
+                    recent_context,
                 )
-    
+
         print(f"LLM intent: {ai_intent}")
-    
-        if ai_intent.action == "none":
+
+        if ai_intent.action != "none":
+            save_recent_context(
+                message.guild.id,
+                message.author.id,
+                ai_intent,
+            )
+        else:
             return
-    
+
     # -------------------------
     # Owner-only data wipe
     # -------------------------
@@ -773,6 +1086,120 @@ async def on_message(message: discord.Message):
             )
             return
             
+
+    # -------------------------
+    # Super Ban cooldown status
+    # -------------------------
+
+    if (
+        (ai_intent and ai_intent.action == "cooldown")
+        or content.strip().lower() in {
+            "super ban cooldown",
+            "super ban ready",
+        }
+    ):
+        remaining = get_super_ban_cooldown_remaining(
+            message.guild.id,
+            message.author.id,
+        )
+
+        if remaining <= 0:
+            await reply_with_tagina(
+                message,
+                event="cooldown_ready",
+                details={"status": "ready"},
+                facts="☢️ **SUPER BAN: READY**",
+                fallback="THE BUTTON IS LIVE. TRY TO USE IT RESPONSIBLY. OR DON'T.",
+            )
+        else:
+            await reply_with_tagina(
+                message,
+                event="cooldown_wait",
+                details={"status": "recharging"},
+                facts=(
+                    "⏳ **SUPER BAN RECHARGE:** "
+                    f"approximately **{format_duration(remaining)}**"
+                ),
+                fallback="NOPE. THE BIG RED BUTTON IS STILL RECHARGING.",
+            )
+
+        return
+
+    # -------------------------
+    # Server ban statistics
+    # -------------------------
+
+    if (
+        (ai_intent and ai_intent.action == "stats")
+        or content.strip().lower() in {
+            "ban stats",
+            "server ban stats",
+            "ban report",
+        }
+    ):
+        stats = get_server_stats(message.guild.id)
+
+        if stats["total_requests"] == 0:
+            await reply_with_tagina(
+                message,
+                event="empty_stats",
+                facts="📊 **No ban activity has been recorded yet.**",
+                fallback="THE LEDGER IS EMPTY. SOMEHOW YOU PEOPLE HAVE BEHAVED.",
+            )
+            return
+
+        def display_name(user_id: int) -> str:
+            member = message.guild.get_member(user_id)
+            return member.display_name if member else f"Unknown User ({user_id})"
+
+        top_target = stats["top_target"]
+        weekly_top = stats["weekly_top_target"]
+        top_requester = stats["top_requester"]
+
+        stat_lines = [
+            "📊 **TAGINA BAN REPORT**",
+            f"Requests recorded: **{stats['total_requests']}**",
+            f"Total ban points: **{stats['total_points']}**",
+            f"Requests in last 24h: **{stats['last_24h_requests']}**",
+            f"Super Bans deployed: **{stats['super_bans']}**",
+            f"Self-bans: **{stats['self_bans']}**",
+        ]
+
+        if top_target:
+            stat_lines.append(
+                "Most banned overall: "
+                f"**{display_name(top_target[0])}** — **{top_target[1]} points**"
+            )
+
+        if weekly_top:
+            stat_lines.append(
+                "Most banned this week: "
+                f"**{display_name(weekly_top[0])}** — **{weekly_top[1]} points**"
+            )
+
+        if top_requester:
+            stat_lines.append(
+                "Most prolific accuser: "
+                f"**{display_name(top_requester[0])}** — "
+                f"**{top_requester[1]} requests**"
+            )
+
+        flavor = await get_tagina_flavor(
+            message,
+            event="server_stats",
+            details={
+                "has_activity": True,
+                "includes_weekly_leader": weekly_top is not None,
+            },
+            fallback="I RAN THE NUMBERS. THE NUMBERS ARE EMBARRASSING.",
+        )
+
+        await message.reply(
+            flavor + "\n\n" + "\n".join(stat_lines),
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+        return
+
     # -------------------------
     # Ban leaderboard
     # -------------------------
@@ -788,7 +1215,12 @@ async def on_message(message: discord.Message):
         results = get_all_ban_counts(message.guild.id)
 
         if not results:
-            await message.reply("No ban requests have been recorded yet.")
+            await reply_with_tagina(
+                message,
+                event="empty_leaderboard",
+                facts="🔨 **No ban requests have been recorded yet.**",
+                fallback="THE LEADERBOARD IS EMPTY. DISAPPOINTING.",
+            )
             return
 
         lines = []
@@ -830,9 +1262,15 @@ async def on_message(message: discord.Message):
             targets = resolve_targets(message)
 
         if not targets:
-            await message.reply(
-                "I couldn't figure out who you're asking about. "
-                "Try using an @mention or a known name."
+            await reply_with_tagina(
+                message,
+                event="unknown_count_target",
+                details={"request_type": "count"},
+                facts=(
+                    "I couldn't resolve that person. "
+                    "Try an @mention or a known name."
+                ),
+                fallback="WHO? GIVE ME A NAME THAT EXISTS.",
             )
             return
 
@@ -902,9 +1340,15 @@ async def on_message(message: discord.Message):
     
     
     if not targets:
-        await message.reply(
-            "I couldn't figure out who we're banning. "
-            "Try using an @mention or a known name."
+        await reply_with_tagina(
+            message,
+            event="unknown_ban_target",
+            details={"request_type": "ban"},
+            facts=(
+                "I couldn't resolve the ban target. "
+                "Try an @mention or a known name."
+            ),
+            fallback="WHO THE HELL IS THAT. GIVE ME A REAL TARGET.",
         )
         return
     
@@ -919,8 +1363,19 @@ async def on_message(message: discord.Message):
             message.guild.id,
             message.author.id
         ):
-            await message.reply(
-                "🚫 Your Super Ban is still recharging."
+            remaining = get_super_ban_cooldown_remaining(
+                message.guild.id,
+                message.author.id,
+            )
+            await reply_with_tagina(
+                message,
+                event="super_ban_blocked",
+                details={"status": "recharging"},
+                facts=(
+                    "🚫 **SUPER BAN RECHARGE:** "
+                    f"approximately **{format_duration(remaining)}**"
+                ),
+                fallback="NOT YET. THE BIG RED BUTTON IS STILL RECHARGING.",
             )
             return
     
@@ -929,7 +1384,7 @@ async def on_message(message: discord.Message):
         
     # -------------------------
     # Limited users:
-    # one ban every 24 hours
+    # one ban every hour
     # with a 50% backfire chance
     # -------------------------
 
@@ -957,11 +1412,13 @@ async def on_message(message: discord.Message):
     # -------------------------
 
     recorded_targets = []
+    attempted_bot_target = False
 
     for target in targets:
 
         # Don't let people request the bot itself
         if target.id == client.user.id:
+            attempted_bot_target = True
             continue
 
         added = add_ban_request(
@@ -975,6 +1432,14 @@ async def on_message(message: discord.Message):
             recorded_targets.append(target)
 
     if not recorded_targets:
+        if attempted_bot_target:
+            await reply_with_tagina(
+                message,
+                event="bot_target",
+                target_name=client.user.display_name,
+                facts="🤖 **TAGINA cannot receive ban points.**",
+                fallback="NICE TRY. I AM THE PAPERWORK.",
+            )
         return
        
 
@@ -997,8 +1462,7 @@ async def on_message(message: discord.Message):
         # -------------------------
     
         if super_ban and backfired:
-            event = "super_ban_backfire"
-            fallback = (
+            event = "super_ban_backfire"            fallback = (
                 "☢️ SUPER BAN CATASTROPHIC BACKFIRE. "
                 "BEAUTIFUL WORK, TIMMY."
             )
@@ -1028,54 +1492,102 @@ async def on_message(message: discord.Message):
         # Let TAGINA react
         # -------------------------
     
-        try:
-            async with message.channel.typing():
-                async with llm_semaphore:
-                    flavor = await asyncio.to_thread(
-                        generate_tagina_response,
-                        event,
-                        message.author.display_name,
-                        target.display_name
-                    )
-    
-            if not flavor:
-                flavor = fallback
-    
-        except Exception as error:
-            print(
-                f"TAGINA personality generation failed: {error}"
-            )
-            flavor = fallback
-    
-        # -------------------------
+
+        flavor = await get_tagina_flavor(
+            message,
+            event,
+            target_name=target.display_name,
+            details={
+                "super_ban": super_ban,
+                "backfired": backfired,
+            },
+            fallback=fallback,
+        )
+
         # Deterministic facts
         # -------------------------
     
-        response = flavor
+
     
-        point_word = "POINT" if count == 1 else "POINTS"
+
         
-        response += (
+
             f"\n\n🔨 **{target.display_name}** — "
             f"**{count} BAN {point_word}**"
         )
     
-        if super_ban:
+
             response += (
                 f"\n💥 THIS HIT: **{ban_value} POINTS**"
             )
     
-        if title:
+
             response += (
                 f"\nDESIGNATION: **{title}**"
             )
     
-        await message.reply(
+
+        # -------------------------
+        # Milestones / achievements
+        # -------------------------
+
+        previous_count = max(0, count - ban_value)
+        milestone = get_crossed_milestone(
+            previous_count,
+            count,
+        )
+
+        if milestone:
+            threshold, label = milestone
+            response += (
+                f"\n🏆 MILESTONE {threshold}: **{label}**"
+            )
+
+        requester_total = get_requester_request_count(
+            message.guild.id,
+            message.author.id,
+        )
+
+        if requester_total == 25:
+            response += (
+                "\n📋 ACHIEVEMENT: **FREQUENT FILER**"
+            )
+        elif requester_total == 100:
+            response += (
+                "\n🗂️ ACHIEVEMENT: **BAN INDUSTRIALIST**"
+            )
+
+        if target.id == message.author.id:
+            self_ban_total = get_self_ban_count(
+                message.guild.id,
+                target.id,
+            )
+
+            if self_ban_total == 5:
+                response += (
+                    "\n🪞 ACHIEVEMENT: **SELF REPORTER**"
+                )
+            elif self_ban_total == 10:
+                response += (
+                    "\n🪞 ACHIEVEMENT: **OWN WORST ENEMY**"
+                )
+
+        if super_ban:
+            super_bans_received = get_super_bans_received(
+                message.guild.id,
+                target.id,
+            )
+
+            if super_bans_received == 3:
+                response += (
+                    "\n☢️ ACHIEVEMENT: **SUPER BAN MAGNET**"
+                )
+
             response,
             allowed_mentions=discord.AllowedMentions.none()
         )
     
-        return
+
 
     lines = []
 
