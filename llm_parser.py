@@ -7,116 +7,113 @@ from ollama import chat
 
 MODEL = "qwen3:8b"
 
+VALID_ACTIONS = {
+    "ban",
+    "count",
+    "leaderboard",
+    "cooldown",
+    "stats",
+    "none",
+}
+
+VALID_STATS = {
+    "most_banned_week",
+    "top_accusers",
+    "super_bans",
+    "self_bans",
+    "recent_activity",
+}
+
 
 @dataclass
 class MessageIntent:
     action: str = "none"
     targets: list[str] = field(default_factory=list)
     super_ban: bool = False
+    stat_type: str | None = None
 
 
 SYSTEM_PROMPT = """
-You are the language parser for a humorous Discord bot called Ban Counter.
+You are the language parser for a humorous Discord ban-counter bot called TAGINA.
 
-Your ONLY job is to interpret a Discord message.
+Your ONLY job is to classify a ban-counter-related Discord message into structured JSON.
+You are not a general chatbot.
 
-"Ban Bot" and "Tagina" are names users may use to address you.
-Never interpret "Ban Bot", "Ban", "Bot", or "Tagina" as target users
-when they are being used to invoke the assistant.
-
-EVENT FACTS:
-- requester_name is the person who requested the ban.
-- target_name is the ONLY person who received the ban.
-- Never imply that requester_name was banned unless the event is
-  "ban_backfire" or "super_ban_backfire".
-- Never imply that more people were banned than the application says.
+"Ban Bot" and "Tagina" are invocation names. Never return either as a target when
+they are being used to address the bot.
 
 Possible actions:
-- "ban"
-- "count"
-- "leaderboard"
-- "none"
+- "ban": user is requesting fictional ban points for one or more people
+- "count": user wants the current ban-point total for one or more people
+- "leaderboard": user wants the all-time ban leaderboard
+- "cooldown": user wants to know whether their Super Ban is ready or how long remains
+- "stats": user wants one of the supported ban statistics
+- "none": unrelated, negated, conversational, or unsupported request
+
+For action="stats", stat_type must be one of:
+- "most_banned_week": most ban points received during the last 7 days
+- "top_accusers": users who have submitted the most distinct ban requests
+- "super_bans": number of Super Bans received by a target
+- "self_bans": number of times a target requested a ban on themselves
+- "recent_activity": recent ban-counter activity
 
 Examples:
 
-User:
-ban conner
+"ban conner"
+{"action":"ban","targets":["conner"],"super_ban":false,"stat_type":null}
 
-Output:
-{
-  "action": "ban",
-  "targets": ["conner"],
-  "super_ban": false
-}
+"I invoke the ancient rite of the super ban upon CJ"
+{"action":"ban","targets":["CJ"],"super_ban":true,"stat_type":null}
 
-User:
-Grok remove this vile creature Conner from my sight
+"how many bans does Tyler have"
+{"action":"count","targets":["Tyler"],"super_ban":false,"stat_type":null}
 
-Output:
-{
-  "action": "ban",
-  "targets": ["Conner"],
-  "super_ban": false
-}
+"show me the ban leaderboard"
+{"action":"leaderboard","targets":[],"super_ban":false,"stat_type":null}
 
-User:
-I invoke the ancient rite of the super ban upon CJ
+"can I super ban yet?"
+{"action":"cooldown","targets":[],"super_ban":false,"stat_type":null}
 
-Output:
-{
-  "action": "ban",
-  "targets": ["CJ"],
-  "super_ban": true
-}
+"who got banned the most this week?"
+{"action":"stats","targets":[],"super_ban":false,"stat_type":"most_banned_week"}
 
-User:
-how many bans does Tyler have
+"who hands out the most bans?"
+{"action":"stats","targets":[],"super_ban":false,"stat_type":"top_accusers"}
 
-Output:
-{
-  "action": "count",
-  "targets": ["Tyler"],
-  "super_ban": false
-}
+"how many super bans has CJ eaten?"
+{"action":"stats","targets":["CJ"],"super_ban":false,"stat_type":"super_bans"}
 
-User:
-show me the ban leaderboard
+"how many times has CJ banned himself?"
+{"action":"stats","targets":["CJ"],"super_ban":false,"stat_type":"self_bans"}
 
-Output:
-{
-  "action": "leaderboard",
-  "targets": [],
-  "super_ban": false
-}
+"what happened recently?"
+{"action":"stats","targets":[],"super_ban":false,"stat_type":"recent_activity"}
 
-User:
-don't ban Conner
+"don't ban Conner"
+{"action":"none","targets":[],"super_ban":false,"stat_type":null}
 
-Output:
-{
-  "action": "none",
-  "targets": [],
-  "super_ban": false
-}
+"what are we playing tonight?"
+{"action":"none","targets":[],"super_ban":false,"stat_type":null}
 
-User:
-we should not ban CJ
+FOLLOW-UP CONTEXT:
+The application may provide a small recent_context object containing only structured,
+temporary state from the user's previous TAGINA request. Use it only when the current
+message is obviously a follow-up.
 
-Output:
-{
-  "action": "none",
-  "targets": [],
-  "super_ban": false
-}
+Example:
+recent_context={"action":"count","targets":["Tyler"]}
+current_message="what about CJ?"
+=> {"action":"count","targets":["CJ"],"super_ban":false,"stat_type":null}
 
-Do NOT decide whether the action is allowed.
+Never inherit a previous "ban" action from context. A vague follow-up must never create
+a new ban request. Context may only help with informational requests such as count or stats.
+
+Do NOT decide whether an action is allowed.
 Do NOT apply cooldowns.
 Do NOT modify ban counts.
 Do NOT select random Discord users.
 Do NOT enforce application rules.
-
-Preserve names and nicknames from the user's message as targets.
-
+Preserve names and nicknames from the current message as targets.
 Return JSON only.
 """
 
@@ -129,11 +126,21 @@ def strip_ai_trigger(content: str) -> str:
         "",
         content,
         count=1,
-        flags=re.IGNORECASE
+        flags=re.IGNORECASE,
     ).strip()
 
-def interpret_message(content: str) -> MessageIntent:
-    content = strip_ai_trigger(content)
+
+def interpret_message(
+    content: str,
+    context: dict | None = None,
+) -> MessageIntent:
+    payload = {
+        "current_message": strip_ai_trigger(content),
+    }
+
+    if context:
+        payload["recent_context"] = context
+
     response = chat(
         model=MODEL,
         messages=[
@@ -143,7 +150,7 @@ def interpret_message(content: str) -> MessageIntent:
             },
             {
                 "role": "user",
-                "content": content,
+                "content": json.dumps(payload),
             },
         ],
         format="json",
@@ -157,10 +164,39 @@ def interpret_message(content: str) -> MessageIntent:
     try:
         data = json.loads(response.message.content)
 
+        action = data.get("action", "none")
+        if action not in VALID_ACTIONS:
+            action = "none"
+
+        targets = data.get("targets", [])
+        if not isinstance(targets, list):
+            targets = []
+
+        targets = [
+            target.strip()
+            for target in targets
+            if isinstance(target, str) and target.strip()
+        ][:5]
+
+        super_ban = data.get("super_ban", False)
+        if not isinstance(super_ban, bool):
+            super_ban = False
+
+        stat_type = data.get("stat_type")
+        if stat_type not in VALID_STATS:
+            stat_type = None
+
+        if action != "stats":
+            stat_type = None
+
+        if action != "ban":
+            super_ban = False
+
         return MessageIntent(
-            action=data.get("action", "none"),
-            targets=data.get("targets", []),
-            super_ban=data.get("super_ban", False),
+            action=action,
+            targets=targets,
+            super_ban=super_ban,
+            stat_type=stat_type,
         )
 
     except (json.JSONDecodeError, TypeError, AttributeError):
