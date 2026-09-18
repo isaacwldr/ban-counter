@@ -1449,49 +1449,49 @@ async def on_message(message: discord.Message):
     
     if len(recorded_targets) == 1:
         target = recorded_targets[0]
-    
+
         count = get_ban_count(
             message.guild.id,
             target.id
         )
-    
+
         title = get_ban_title(count)
-    
+
         # -------------------------
         # Determine what happened
         # -------------------------
-    
+
         if super_ban and backfired:
-            event = "super_ban_backfire"            fallback = (
+            event = "super_ban_backfire"
+            fallback = (
                 "☢️ SUPER BAN CATASTROPHIC BACKFIRE. "
                 "BEAUTIFUL WORK, TIMMY."
             )
-    
+
         elif super_ban:
             event = "super_ban"
             fallback = (
                 "🚨 SUPER BAN DEPLOYED. "
                 "FACTORY HAS SPOKEN."
             )
-    
+
         elif backfired:
             event = "ban_backfire"
             fallback = (
                 "💥 BAN BACKFIRE. "
                 "YOU MANAGED TO SHOOT YOURSELF, TIMMY."
             )
-    
+
         else:
             event = "normal_ban"
             fallback = (
                 "🔨 BAN REQUEST RECORDED. "
                 "ANOTHER NAME FOR THE FACTORY LEDGER."
             )
-    
+
         # -------------------------
         # Let TAGINA react
         # -------------------------
-    
 
         flavor = await get_tagina_flavor(
             message,
@@ -1504,28 +1504,27 @@ async def on_message(message: discord.Message):
             fallback=fallback,
         )
 
+        # -------------------------
         # Deterministic facts
         # -------------------------
-    
 
-    
+        response = flavor
+        point_word = "POINT" if count == 1 else "POINTS"
 
-        
-
+        response += (
             f"\n\n🔨 **{target.display_name}** — "
             f"**{count} BAN {point_word}**"
         )
-    
 
+        if super_ban:
             response += (
                 f"\n💥 THIS HIT: **{ban_value} POINTS**"
             )
-    
 
+        if title:
             response += (
                 f"\nDESIGNATION: **{title}**"
             )
-    
 
         # -------------------------
         # Milestones / achievements
@@ -1549,13 +1548,9 @@ async def on_message(message: discord.Message):
         )
 
         if requester_total == 25:
-            response += (
-                "\n📋 ACHIEVEMENT: **FREQUENT FILER**"
-            )
+            response += "\n📋 ACHIEVEMENT: **FREQUENT FILER**"
         elif requester_total == 100:
-            response += (
-                "\n🗂️ ACHIEVEMENT: **BAN INDUSTRIALIST**"
-            )
+            response += "\n🗂️ ACHIEVEMENT: **BAN INDUSTRIALIST**"
 
         if target.id == message.author.id:
             self_ban_total = get_self_ban_count(
@@ -1564,13 +1559,9 @@ async def on_message(message: discord.Message):
             )
 
             if self_ban_total == 5:
-                response += (
-                    "\n🪞 ACHIEVEMENT: **SELF REPORTER**"
-                )
+                response += "\n🪞 ACHIEVEMENT: **SELF REPORTER**"
             elif self_ban_total == 10:
-                response += (
-                    "\n🪞 ACHIEVEMENT: **OWN WORST ENEMY**"
-                )
+                response += "\n🪞 ACHIEVEMENT: **OWN WORST ENEMY**"
 
         if super_ban:
             super_bans_received = get_super_bans_received(
@@ -1579,15 +1570,14 @@ async def on_message(message: discord.Message):
             )
 
             if super_bans_received == 3:
-                response += (
-                    "\n☢️ ACHIEVEMENT: **SUPER BAN MAGNET**"
-                )
+                response += "\n☢️ ACHIEVEMENT: **SUPER BAN MAGNET**"
 
+        await message.reply(
             response,
             allowed_mentions=discord.AllowedMentions.none()
         )
-    
 
+        return
 
     lines = []
 
