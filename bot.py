@@ -1037,9 +1037,21 @@ async def on_message(message: discord.Message):
     # -------------------------
     
     ai_intent = None
-    
-    if has_ai_trigger(content):
-        llm_content = remove_ai_trigger(content)
+
+    # TAGINA can be invoked either by name ("Tagina ...") or by directly
+    # mentioning the bot at the start of the message.
+    mention_trigger = re.match(
+        rf"^\\s*<@!?{client.user.id}>[,:]?\\s*",
+        content,
+        re.IGNORECASE,
+    )
+
+    if has_ai_trigger(content) or mention_trigger:
+        if mention_trigger:
+            llm_content = content[mention_trigger.end():].strip()
+        else:
+            llm_content = remove_ai_trigger(content)
+
         recent_context = get_recent_context(
             message.guild.id,
             message.author.id,
