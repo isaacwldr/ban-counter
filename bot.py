@@ -1397,7 +1397,7 @@ async def on_message(message: discord.Message):
     # -------------------------
     # Limited users:
     # one ban every hour
-    # with a 50% backfire chance
+    # with a 5% backfire chance
     # -------------------------
 
     backfired = False
@@ -1414,8 +1414,8 @@ async def on_message(message: discord.Message):
         # Limited users can only target one person
         targets = targets[:1]
 
-        # 50/50 chance their ban hits themselves instead
-        if random.random() < 0.5:
+        # 5% chance their ban hits themselves instead
+        if random.random() < 0.05:
             targets = [message.author]
             backfired = True
 
