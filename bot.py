@@ -225,7 +225,7 @@ def has_used_daily_ban(guild_id: int, requester_user_id: int) -> bool:
             FROM ban_requests
             WHERE guild_id = ?
               AND requested_by_user_id = ?
-              AND created_at >= datetime('now', '-24 hours')
+              AND created_at >= datetime('now', '-1 hours')
             LIMIT 1
         """, (
             guild_id,
@@ -653,16 +653,30 @@ def resolve_targets(message: discord.Message):
     )
     
 def get_ban_title(count: int):
-    if count >= 100:
-        return "☢️ EXISTENTIAL THREAT"
+    if count >= 1000:
+        return "🗄️ BEYOND ADMINISTRATIVE CONTROL"
+    elif count >= 500:
+        return "💀 FINAL BOSS OF BAD DECISIONS"
+    elif count >= 250:
+        return "☢️ COMMUNITY HAZARD"
+    elif count >= 150:
+        return "🔥 SERVER-WIDE LIABILITY"
+    elif count >= 100:
+        return "📢 PUBLIC ENEMY"
+    elif count >= 75:
+        return "🧾 PERMANENTLY ON THE LIST"
     elif count >= 50:
-        return "🚨 ENEMY OF THE SERVER"
+        return "🚨 REPEAT PUBLIC NUISANCE"
+    elif count >= 35:
+        return "🧨 SERIAL MENACE"
     elif count >= 25:
-        return "⚠️ PUBLIC MENACE"
+        return "😈 CERTIFIED PROBLEM"
+    elif count >= 15:
+        return "👁️ UNDER SUSPICIOUS OBSERVATION"
     elif count >= 10:
         return "👀 PERSON OF INTEREST"
     elif count >= 5:
-        return "🤨 SUSPICIOUS INDIVIDUAL"
+        return "🤨 REPEAT OFFENDER"
 
     return None
     
