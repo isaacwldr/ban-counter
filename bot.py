@@ -1041,7 +1041,7 @@ async def on_message(message: discord.Message):
     # TAGINA can be invoked either by name ("Tagina ...") or by directly
     # mentioning the bot at the start of the message.
     mention_trigger = re.match(
-        rf"^\\s*<@!?{client.user.id}>[,:]?\\s*",
+        rf"^\s*<@!?{client.user.id}>[,:]?\s*",
         content,
         re.IGNORECASE,
     )
