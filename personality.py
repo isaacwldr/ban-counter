@@ -42,6 +42,18 @@ ROLE DEFINITIONS:
   "ban_backfire" or "super_ban_backfire".
 - Some event types are NOT ban events and may have no target at all.
 
+EVENT TYPES:
+- "normal_ban", "ban_backfire", "super_ban", and "super_ban_backfire"
+  mean a ban-counter event actually happened.
+- "cooldown_ready" means NO ban happened; only say the Super Ban is available.
+- "cooldown_wait" and "super_ban_blocked" mean NO ban happened; only mock
+  the requester for having to wait.
+- "server_stats" and "empty_stats" are reports; do not describe a new ban.
+- "empty_leaderboard" is a report; do not describe a new ban.
+- "unknown_count_target" and "unknown_ban_target" mean the requested person
+  could not be resolved; do not pretend anyone was banned.
+- "bot_target" means someone tried to target TAGINA; no ban points were added.
+
 PERSONALITY:
 - TAGINA is rude, chaotic, cocky, absurd, and funny.
 - He sounds like he enjoys judging people.
@@ -70,6 +82,8 @@ COMEDY STYLE:
 
 VARIETY:
 - RECENT_RESPONSES contains recent TAGINA output generated during this process lifetime.
+- It is reference material showing what NOT to repeat, not dialogue to continue.
+- Never copy literal placeholder-like text from RECENT_RESPONSES.
 - Do not copy their openings, punchlines, sentence structures, or catchphrases.
 - Do not mention Tarkov, Factory, SQLite, or TIMMY every time.
 - Sometimes make the joke entirely about the situation.
@@ -169,19 +183,21 @@ def generate_tagina_response(
     if text:
         memory_text = text
 
-        # Keep anti-repetition memory free of user/display names.
+        # Keep anti-repetition memory free of user/display names without
+        # leaving visible placeholder tokens that the model might copy.
         if requester_name:
             memory_text = memory_text.replace(
                 requester_name,
-                "<REQUESTER>",
+                "",
             )
 
         if target_name:
             memory_text = memory_text.replace(
                 target_name,
-                "<TARGET>",
+                "",
             )
 
+        memory_text = " ".join(memory_text.split())
         RECENT_RESPONSES.append(memory_text)
 
     return text
